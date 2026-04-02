@@ -1,11 +1,12 @@
 package com.gateway;
 
 import org.springframework.http.*;
+import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.client.RestTemplate;
 
 @RestController
-@CrossOrigin(origins = "*")
+@CrossOrigin(origins = "*", allowedHeaders = "*", methods = {RequestMethod.GET, RequestMethod.POST, RequestMethod.PUT, RequestMethod.DELETE, RequestMethod.OPTIONS})
 @RequestMapping("/gateway")
 public class GatewayController {
 
