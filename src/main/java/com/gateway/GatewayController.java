@@ -33,7 +33,13 @@ public class GatewayController {
 
     private ResponseEntity<?> getCached(String cacheKey, String url, HttpHeaders headers) {
         try {
-            String cached = redisTemplate.opsForValue().get(cacheKey);
+            String cached = null;
+            try {
+                cached = redisTemplate.opsForValue().get(cacheKey);
+            } catch (Exception redisEx) {
+                System.out.println("Redis unavailable, skipping cache: " + redisEx.getMessage());
+            }
+
             if (cached != null) {
                 System.out.println("CACHE HIT: " + cacheKey);
                 return ResponseEntity.ok()
@@ -41,18 +47,39 @@ public class GatewayController {
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(cached);
             }
+
             System.out.println("CACHE MISS: " + cacheKey);
             HttpEntity<?> entity = new HttpEntity<>(headers);
             ResponseEntity<String> response = restTemplate.exchange(url, HttpMethod.GET, entity, String.class);
+
             if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
-                redisTemplate.opsForValue().set(cacheKey, response.getBody(), CACHE_TTL, TimeUnit.SECONDS);
+                try {
+                    redisTemplate.opsForValue().set(cacheKey, response.getBody(), CACHE_TTL, TimeUnit.SECONDS);
+                } catch (Exception redisEx) {
+                    System.out.println("Redis unavailable, skipping cache store: " + redisEx.getMessage());
+                }
             }
+
             return ResponseEntity.ok()
                 .header("X-Cache", "MISS")
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(response.getBody());
+
         } catch (HttpClientErrorException e) {
             return ResponseEntity.status(e.getStatusCode()).body(e.getResponseBodyAsString());
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body("{\"error\":\"" + e.getMessage() + "\"}");
+        }
+    }
+
+    private void invalidateCache(String... keys) {
+        try {
+            for (String key : keys) {
+                redisTemplate.delete(key);
+                System.out.println("CACHE INVALIDATED: " + key);
+            }
+        } catch (Exception redisEx) {
+            System.out.println("Redis unavailable, skipping cache invalidation: " + redisEx.getMessage());
         }
     }
 
@@ -111,11 +138,12 @@ public class GatewayController {
             if (bio != null) url += "&bio=" + bio;
             if (phone != null) url += "&phone=" + phone;
             ResponseEntity<String> response = restTemplate.exchange(url, HttpMethod.POST, entity, String.class);
-            redisTemplate.delete("users:all");
-            System.out.println("CACHE INVALIDATED: users:all");
+            invalidateCache("users:all");
             return response;
         } catch (HttpClientErrorException e) {
             return ResponseEntity.status(e.getStatusCode()).body(e.getResponseBodyAsString());
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body("{\"error\":\"" + e.getMessage() + "\"}");
         }
     }
 
@@ -134,12 +162,12 @@ public class GatewayController {
             if (bio != null) url += "bio=" + bio + "&";
             if (phone != null) url += "phone=" + phone;
             ResponseEntity<String> response = restTemplate.exchange(url, HttpMethod.PUT, entity, String.class);
-            redisTemplate.delete("users:" + id);
-            redisTemplate.delete("users:all");
-            System.out.println("CACHE INVALIDATED: users:" + id);
+            invalidateCache("users:" + id, "users:all");
             return response;
         } catch (HttpClientErrorException e) {
             return ResponseEntity.status(e.getStatusCode()).body(e.getResponseBodyAsString());
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body("{\"error\":\"" + e.getMessage() + "\"}");
         }
     }
 
@@ -152,12 +180,12 @@ public class GatewayController {
             HttpEntity<?> entity = new HttpEntity<>(headers);
             ResponseEntity<String> response = restTemplate.exchange(
                 JSON_SERVICE + "/users/" + id, HttpMethod.DELETE, entity, String.class);
-            redisTemplate.delete("users:" + id);
-            redisTemplate.delete("users:all");
-            System.out.println("CACHE INVALIDATED: users:" + id);
+            invalidateCache("users:" + id, "users:all");
             return response;
         } catch (HttpClientErrorException e) {
             return ResponseEntity.status(e.getStatusCode()).body(e.getResponseBodyAsString());
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body("{\"error\":\"" + e.getMessage() + "\"}");
         }
     }
 
@@ -172,11 +200,12 @@ public class GatewayController {
             ResponseEntity<String> response = restTemplate.exchange(
                 JSON_SERVICE + "/users/" + id + "/image?imageUrl=" + imageUrl,
                 HttpMethod.PATCH, entity, String.class);
-            redisTemplate.delete("users:" + id);
-            redisTemplate.delete("users:all");
+            invalidateCache("users:" + id, "users:all");
             return response;
         } catch (HttpClientErrorException e) {
             return ResponseEntity.status(e.getStatusCode()).body(e.getResponseBodyAsString());
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body("{\"error\":\"" + e.getMessage() + "\"}");
         }
     }
 }
