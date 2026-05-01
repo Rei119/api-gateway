@@ -197,9 +197,12 @@ public class GatewayController {
             HttpHeaders headers = new HttpHeaders();
             headers.set("Authorization", token);
             HttpEntity<?> entity = new HttpEntity<>(headers);
+            
+            String encodedUrl = org.springframework.web.util.UriUtils.encode(imageUrl, "UTF-8");
+            String url = JSON_SERVICE + "/users/" + id + "/image?imageUrl=" + encodedUrl;
+            
             ResponseEntity<String> response = restTemplate.exchange(
-                JSON_SERVICE + "/users/" + id + "/image?imageUrl=" + imageUrl,
-                HttpMethod.PATCH, entity, String.class);
+                url, HttpMethod.PATCH, entity, String.class);
             invalidateCache("users:" + id, "users:all");
             return response;
         } catch (HttpClientErrorException e) {
