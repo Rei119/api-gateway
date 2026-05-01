@@ -13,7 +13,8 @@ import java.util.concurrent.TimeUnit;
 @RestController
 @CrossOrigin(origins = "*", allowedHeaders = "*", methods = {
     RequestMethod.GET, RequestMethod.POST,
-    RequestMethod.PUT, RequestMethod.DELETE, RequestMethod.OPTIONS
+    RequestMethod.PUT, RequestMethod.DELETE, RequestMethod.OPTIONS,
+    RequestMethod.PATCH
 })
 @RequestMapping("/gateway")
 public class GatewayController {
@@ -198,15 +199,22 @@ public class GatewayController {
             headers.set("Authorization", token);
             HttpEntity<?> entity = new HttpEntity<>(headers);
 
-            String url = JSON_SERVICE + "/users/" + id + "/image?imageUrl=" + imageUrl;
+            java.net.URI uri = org.springframework.web.util.UriComponentsBuilder
+                .fromHttpUrl(JSON_SERVICE)
+                .path("/users/{id}/image")
+                .queryParam("imageUrl", "{imageUrl}")
+                .buildAndExpand(id, imageUrl)
+                .toUri();
 
             ResponseEntity<String> response = restTemplate.exchange(
-                new java.net.URI(url), HttpMethod.PATCH, entity, String.class);
+                uri, HttpMethod.PATCH, entity, String.class);
             invalidateCache("users:" + id, "users:all");
             return response;
         } catch (HttpClientErrorException e) {
+            System.out.println("ERROR in updateImage HttpClientError: " + e.getStatusCode() + " - " + e.getResponseBodyAsString());
             return ResponseEntity.status(e.getStatusCode()).body(e.getResponseBodyAsString());
         } catch (Exception e) {
+            System.out.println("ERROR in updateImage: " + e.getClass().getName() + " - " + e.getMessage());
             return ResponseEntity.status(500).body("{\"error\":\"" + e.getMessage() + "\"}");
         }
     }
