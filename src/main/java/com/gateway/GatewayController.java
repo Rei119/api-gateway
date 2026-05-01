@@ -1,14 +1,18 @@
 package com.gateway;
 
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.http.*;
-import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.web.client.RestTemplate;
 import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.RestTemplate;
+
+import java.util.concurrent.TimeUnit;
 
 @RestController
 @CrossOrigin(origins = "*", allowedHeaders = "*", methods = {
-    RequestMethod.GET, RequestMethod.POST, 
+    RequestMethod.GET, RequestMethod.POST,
     RequestMethod.PUT, RequestMethod.DELETE, RequestMethod.OPTIONS
 })
 @RequestMapping("/gateway")
@@ -16,102 +20,44 @@ public class GatewayController {
 
     private RestTemplate restTemplate = new RestTemplate();
 
-    private static final String JSON_SERVICE = System.getenv("JSON_SERVICE_URL") != null
-            ? System.getenv("JSON_SERVICE_URL")
-            : "http://localhost:8084";
+    @Autowired
+    private RedisTemplate<String, String> redisTemplate;
 
-    @GetMapping("/users/{id}")
-    public ResponseEntity<?> getUser(
-            @PathVariable String id,
-            @RequestHeader("Authorization") String token) {
-        try {
-            HttpHeaders headers = new HttpHeaders();
-            headers.set("Authorization", token);
-            HttpEntity<?> entity = new HttpEntity<>(headers);
-            return restTemplate.exchange(
-                JSON_SERVICE + "/users/" + id,
-                HttpMethod.GET, entity, String.class);
-        } catch (HttpClientErrorException e) {
-            return ResponseEntity.status(e.getStatusCode()).body(e.getResponseBodyAsString());
-        }
-    }
+    @Value("${json.service.url}")
+    private String JSON_SERVICE;
 
-    @GetMapping("/users")
-    public ResponseEntity<?> getAllUsers(
-            @RequestHeader("Authorization") String token) {
-        try {
-            HttpHeaders headers = new HttpHeaders();
-            headers.set("Authorization", token);
-            HttpEntity<?> entity = new HttpEntity<>(headers);
-            return restTemplate.exchange(
-                JSON_SERVICE + "/users",
-                HttpMethod.GET, entity, String.class);
-        } catch (HttpClientErrorException e) {
-            return ResponseEntity.status(e.getStatusCode()).body(e.getResponseBodyAsString());
-        }
-    }
+    @Value("${file.service.url}")
+    private String FILE_SERVICE;
 
-    @PostMapping("/users")
-    public ResponseEntity<?> createUser(
-            @RequestHeader("Authorization") String token,
-            @RequestParam String name,
-            @RequestParam String email,
-            @RequestParam(required = false) String bio,
-            @RequestParam(required = false) String phone) {
-        try {
-            HttpHeaders headers = new HttpHeaders();
-            headers.set("Authorization", token);
-            HttpEntity<?> entity = new HttpEntity<>(headers);
-            String url = JSON_SERVICE + "/users?name=" + name + "&email=" + email;
-            if (bio != null) url += "&bio=" + bio;
-            if (phone != null) url += "&phone=" + phone;
-            return restTemplate.exchange(url, HttpMethod.POST, entity, String.class);
-        } catch (HttpClientErrorException e) {
-            return ResponseEntity.status(e.getStatusCode()).body(e.getResponseBodyAsString());
-        }
-    }
+    private static final int CACHE_TTL = 60;
 
-    @PutMapping("/users/{id}")
-    public ResponseEntity<?> updateUser(
-            @RequestHeader("Authorization") String token,
-            @PathVariable String id,
-            @RequestParam(required = false) String name,
-            @RequestParam(required = false) String bio,
-            @RequestParam(required = false) String phone) {
+    private ResponseEntity<?> getCached(String cacheKey, String url, HttpHeaders headers) {
         try {
-            HttpHeaders headers = new HttpHeaders();
-            headers.set("Authorization", token);
+            String cached = redisTemplate.opsForValue().get(cacheKey);
+            if (cached != null) {
+                System.out.println("CACHE HIT: " + cacheKey);
+                return ResponseEntity.ok()
+                    .header("X-Cache", "HIT")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(cached);
+            }
+            System.out.println("CACHE MISS: " + cacheKey);
             HttpEntity<?> entity = new HttpEntity<>(headers);
-            String url = JSON_SERVICE + "/users/" + id + "?";
-            if (name != null) url += "name=" + name + "&";
-            if (bio != null) url += "bio=" + bio + "&";
-            if (phone != null) url += "phone=" + phone;
-            return restTemplate.exchange(url, HttpMethod.PUT, entity, String.class);
-        } catch (HttpClientErrorException e) {
-            return ResponseEntity.status(e.getStatusCode()).body(e.getResponseBodyAsString());
-        }
-    }
-
-    @DeleteMapping("/users/{id}")
-    public ResponseEntity<?> deleteUser(
-            @RequestHeader("Authorization") String token,
-            @PathVariable String id) {
-        try {
-            HttpHeaders headers = new HttpHeaders();
-            headers.set("Authorization", token);
-            HttpEntity<?> entity = new HttpEntity<>(headers);
-            return restTemplate.exchange(
-                JSON_SERVICE + "/users/" + id,
-                HttpMethod.DELETE, entity, String.class);
+            ResponseEntity<String> response = restTemplate.exchange(url, HttpMethod.GET, entity, String.class);
+            if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
+                redisTemplate.opsForValue().set(cacheKey, response.getBody(), CACHE_TTL, TimeUnit.SECONDS);
+            }
+            return ResponseEntity.ok()
+                .header("X-Cache", "MISS")
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(response.getBody());
         } catch (HttpClientErrorException e) {
             return ResponseEntity.status(e.getStatusCode()).body(e.getResponseBodyAsString());
         }
     }
 
     @GetMapping("/auth/register")
-    public ResponseEntity<?> register(
-            @RequestParam String username,
-            @RequestParam String password) {
+    public ResponseEntity<?> register(@RequestParam String username, @RequestParam String password) {
         try {
             return restTemplate.getForEntity(
                 JSON_SERVICE + "/auth/register?username=" + username + "&password=" + password,
@@ -124,9 +70,7 @@ public class GatewayController {
     }
 
     @GetMapping("/auth/login")
-    public ResponseEntity<?> login(
-            @RequestParam String username,
-            @RequestParam String password) {
+    public ResponseEntity<?> login(@RequestParam String username, @RequestParam String password) {
         try {
             return restTemplate.getForEntity(
                 JSON_SERVICE + "/auth/login?username=" + username + "&password=" + password,
@@ -135,6 +79,104 @@ public class GatewayController {
             return ResponseEntity.status(e.getStatusCode()).body(e.getResponseBodyAsString());
         } catch (Exception e) {
             return ResponseEntity.status(500).body("{\"error\":\"" + e.getMessage() + "\"}");
+        }
+    }
+
+    @GetMapping("/users")
+    public ResponseEntity<?> getAllUsers(@RequestHeader("Authorization") String token) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("Authorization", token);
+        return getCached("users:all", JSON_SERVICE + "/users", headers);
+    }
+
+    @GetMapping("/users/{id}")
+    public ResponseEntity<?> getUser(@PathVariable String id,
+                                      @RequestHeader("Authorization") String token) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("Authorization", token);
+        return getCached("users:" + id, JSON_SERVICE + "/users/" + id, headers);
+    }
+
+    @PostMapping("/users")
+    public ResponseEntity<?> createUser(@RequestHeader("Authorization") String token,
+                                         @RequestParam String name,
+                                         @RequestParam String email,
+                                         @RequestParam(required = false) String bio,
+                                         @RequestParam(required = false) String phone) {
+        try {
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("Authorization", token);
+            HttpEntity<?> entity = new HttpEntity<>(headers);
+            String url = JSON_SERVICE + "/users?name=" + name + "&email=" + email;
+            if (bio != null) url += "&bio=" + bio;
+            if (phone != null) url += "&phone=" + phone;
+            ResponseEntity<String> response = restTemplate.exchange(url, HttpMethod.POST, entity, String.class);
+            redisTemplate.delete("users:all");
+            System.out.println("CACHE INVALIDATED: users:all");
+            return response;
+        } catch (HttpClientErrorException e) {
+            return ResponseEntity.status(e.getStatusCode()).body(e.getResponseBodyAsString());
+        }
+    }
+
+    @PutMapping("/users/{id}")
+    public ResponseEntity<?> updateUser(@RequestHeader("Authorization") String token,
+                                         @PathVariable String id,
+                                         @RequestParam(required = false) String name,
+                                         @RequestParam(required = false) String bio,
+                                         @RequestParam(required = false) String phone) {
+        try {
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("Authorization", token);
+            HttpEntity<?> entity = new HttpEntity<>(headers);
+            String url = JSON_SERVICE + "/users/" + id + "?";
+            if (name != null) url += "name=" + name + "&";
+            if (bio != null) url += "bio=" + bio + "&";
+            if (phone != null) url += "phone=" + phone;
+            ResponseEntity<String> response = restTemplate.exchange(url, HttpMethod.PUT, entity, String.class);
+            redisTemplate.delete("users:" + id);
+            redisTemplate.delete("users:all");
+            System.out.println("CACHE INVALIDATED: users:" + id);
+            return response;
+        } catch (HttpClientErrorException e) {
+            return ResponseEntity.status(e.getStatusCode()).body(e.getResponseBodyAsString());
+        }
+    }
+
+    @DeleteMapping("/users/{id}")
+    public ResponseEntity<?> deleteUser(@RequestHeader("Authorization") String token,
+                                         @PathVariable String id) {
+        try {
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("Authorization", token);
+            HttpEntity<?> entity = new HttpEntity<>(headers);
+            ResponseEntity<String> response = restTemplate.exchange(
+                JSON_SERVICE + "/users/" + id, HttpMethod.DELETE, entity, String.class);
+            redisTemplate.delete("users:" + id);
+            redisTemplate.delete("users:all");
+            System.out.println("CACHE INVALIDATED: users:" + id);
+            return response;
+        } catch (HttpClientErrorException e) {
+            return ResponseEntity.status(e.getStatusCode()).body(e.getResponseBodyAsString());
+        }
+    }
+
+    @PatchMapping("/users/{id}/image")
+    public ResponseEntity<?> updateImage(@RequestHeader("Authorization") String token,
+                                          @PathVariable String id,
+                                          @RequestParam String imageUrl) {
+        try {
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("Authorization", token);
+            HttpEntity<?> entity = new HttpEntity<>(headers);
+            ResponseEntity<String> response = restTemplate.exchange(
+                JSON_SERVICE + "/users/" + id + "/image?imageUrl=" + imageUrl,
+                HttpMethod.PATCH, entity, String.class);
+            redisTemplate.delete("users:" + id);
+            redisTemplate.delete("users:all");
+            return response;
+        } catch (HttpClientErrorException e) {
+            return ResponseEntity.status(e.getStatusCode()).body(e.getResponseBodyAsString());
         }
     }
 }
